@@ -1,0 +1,11 @@
+# Copy this file to config.yml and fill in real credentials.
+# config.yml is ignored by git because it contains secrets.
+
+accounts:
+  global:
+    email: your-global-email@example.com
+    password: your-global-password
+
+  cn:
+    email: your-cn-email@example.cn
+    password: your-cn-password
