@@ -1,0 +1,20 @@
+.venv/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Local Garmin auth/state. Never commit tokens, credentials, reports, or data.
+.env
+config.yml
+.garminsync/
+.garmin-sync-state/
+state/
+tokens/
+reports/
+your_data/
+response.json
