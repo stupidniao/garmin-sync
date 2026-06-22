@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 from garmin_sync.activity import CN_TO_GLOBAL, sync_activities_for_date
+from garmin_sync.audit import AuditLogger, default_audit_log_path
 from garmin_sync.config import ConfigError, load_config
 from garmin_sync.dates import add_months, parse_date
 from garmin_sync.garmin_client import login
@@ -48,10 +49,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional JSON report path",
     )
     compare_steps.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Evaluate without Garmin writes; compare is read-only and still records audit",
+    )
+    compare_steps.add_argument(
         "--config",
         type=Path,
         default=Path("config.yml"),
         help="YAML config path, defaults to config.yml",
+    )
+    compare_steps.add_argument(
+        "--profile",
+        help="Config profile name, defaults to config profile or 'default'",
+    )
+    compare_steps.add_argument(
+        "--audit-log",
+        type=Path,
+        help="Optional JSONL audit log path",
     )
 
     sync_steps = wellness_subparsers.add_parser(
@@ -67,10 +82,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional JSON report path",
     )
     sync_steps.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Evaluate without Garmin writes; steps sync has no verified write path",
+    )
+    sync_steps.add_argument(
         "--config",
         type=Path,
         default=Path("config.yml"),
         help="YAML config path, defaults to config.yml",
+    )
+    sync_steps.add_argument(
+        "--profile",
+        help="Config profile name, defaults to config profile or 'default'",
+    )
+    sync_steps.add_argument(
+        "--audit-log",
+        type=Path,
+        help="Optional JSONL audit log path",
     )
 
     sync_schedule = training_subparsers.add_parser(
@@ -104,6 +133,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path("config.yml"),
         help="YAML config path, defaults to config.yml",
     )
+    sync_schedule.add_argument(
+        "--profile",
+        help="Config profile name, defaults to config profile or 'default'",
+    )
+    sync_schedule.add_argument(
+        "--audit-log",
+        type=Path,
+        help="Optional JSONL audit log path",
+    )
 
     sync_today_activity = activity_subparsers.add_parser(
         "sync-today",
@@ -135,6 +173,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path("config.yml"),
         help="YAML config path, defaults to config.yml",
     )
+    sync_today_activity.add_argument(
+        "--profile",
+        help="Config profile name, defaults to config profile or 'default'",
+    )
+    sync_today_activity.add_argument(
+        "--audit-log",
+        type=Path,
+        help="Optional JSONL audit log path",
+    )
 
     return parser
 
@@ -146,11 +193,70 @@ def _write_report(path: Path, results: object) -> None:
         handle.write("\n")
 
 
+def _audit_logger(args: argparse.Namespace, profile: str, state_dir: Path) -> AuditLogger:
+    command = f"{args.scope}.{args.command}"
+    path = args.audit_log or default_audit_log_path(state_dir)
+    return AuditLogger(path=path, command=command, profile=profile)
+
+
+def _audit_run_started(
+    audit: AuditLogger,
+    args: argparse.Namespace,
+    *,
+    state_path: Path,
+    start: str | None = None,
+    end: str | None = None,
+    sync_date: str | None = None,
+) -> None:
+    audit.log(
+        "run_started",
+        direction=getattr(args, "direction", None),
+        dry_run=bool(getattr(args, "dry_run", False)),
+        force=bool(getattr(args, "force", False)),
+        start=start,
+        end=end,
+        date=sync_date,
+        output=str(args.output) if getattr(args, "output", None) else None,
+        state_path=str(state_path),
+    )
+
+
+def _audit_results(
+    audit: AuditLogger,
+    *,
+    result_type: str,
+    rows: list[dict[str, object]],
+) -> None:
+    for row in rows:
+        audit.log("result", result_type=result_type, result=row)
+
+
+def _audit_completed(
+    audit: AuditLogger,
+    *,
+    rows: list[dict[str, object]],
+) -> None:
+    status_counts: dict[str, int] = {}
+    for row in rows:
+        status = str(row.get("status"))
+        status_counts[status] = status_counts.get(status, 0) + 1
+    audit.log("run_completed", result_count=len(rows), status_counts=status_counts)
+
+
 def _run_compare_steps(args: argparse.Namespace) -> int:
     direction = validate_direction(args.direction)
     start = parse_date(args.start)
     end = parse_date(args.end)
-    config = load_config(args.config)
+    config = load_config(args.config, profile=args.profile)
+    state_path = config.state_dir / "state.sqlite3"
+    audit = _audit_logger(args, config.profile, config.state_dir)
+    _audit_run_started(
+        audit,
+        args,
+        state_path=state_path,
+        start=start.isoformat(),
+        end=end.isoformat(),
+    )
 
     source_client = login(config.global_account)
     target_client = login(config.cn_account)
@@ -164,6 +270,7 @@ def _run_compare_steps(args: argparse.Namespace) -> int:
     )
 
     report_rows = [asdict(result) for result in results]
+    _audit_results(audit, result_type="steps_compare", rows=report_rows)
     for row in report_rows:
         error_suffix = f" error={row['error']}" if row.get("error") else ""
         print(
@@ -175,9 +282,12 @@ def _run_compare_steps(args: argparse.Namespace) -> int:
 
     if args.output:
         _write_report(args.output, report_rows)
+        audit.log("report_written", output=str(args.output))
         print(f"Wrote JSON report: {args.output}")
 
-    print(f"Wrote compare state: {config.state_dir / 'steps_compare.jsonl'}")
+    _audit_completed(audit, rows=report_rows)
+    print(f"Wrote compare state: {state_path}")
+    print(f"Wrote audit log: {audit.path}")
     return 0
 
 
@@ -185,7 +295,16 @@ def _run_sync_steps(args: argparse.Namespace) -> int:
     direction = validate_direction(args.direction)
     start = parse_date(args.start)
     end = parse_date(args.end)
-    config = load_config(args.config)
+    config = load_config(args.config, profile=args.profile)
+    state_path = config.state_dir / "state.sqlite3"
+    audit = _audit_logger(args, config.profile, config.state_dir)
+    _audit_run_started(
+        audit,
+        args,
+        state_path=state_path,
+        start=start.isoformat(),
+        end=end.isoformat(),
+    )
 
     source_client = login(config.global_account)
     target_client = login(config.cn_account)
@@ -199,6 +318,7 @@ def _run_sync_steps(args: argparse.Namespace) -> int:
     )
 
     report_rows = [asdict(result) for result in results]
+    _audit_results(audit, result_type="steps_sync", rows=report_rows)
     for row in report_rows:
         error_suffix = f" error={row['error']}" if row.get("error") else ""
         print(
@@ -211,9 +331,12 @@ def _run_sync_steps(args: argparse.Namespace) -> int:
 
     if args.output:
         _write_report(args.output, report_rows)
+        audit.log("report_written", output=str(args.output))
         print(f"Wrote JSON report: {args.output}")
 
-    print(f"Wrote sync state: {config.state_dir / 'steps_sync.jsonl'}")
+    _audit_completed(audit, rows=report_rows)
+    print(f"Wrote sync state: {state_path}")
+    print(f"Wrote audit log: {audit.path}")
     return 0
 
 
@@ -221,7 +344,16 @@ def _run_sync_schedule(args: argparse.Namespace) -> int:
     direction = validate_direction(args.direction)
     start = parse_date(args.start) if args.start else date.today()
     end = parse_date(args.end) if args.end else add_months(start, 1)
-    config = load_config(args.config)
+    config = load_config(args.config, profile=args.profile)
+    state_path = config.state_dir / "state.sqlite3"
+    audit = _audit_logger(args, config.profile, config.state_dir)
+    _audit_run_started(
+        audit,
+        args,
+        state_path=state_path,
+        start=start.isoformat(),
+        end=end.isoformat(),
+    )
 
     source_client = login(config.global_account)
     target_client = login(config.cn_account)
@@ -237,6 +369,7 @@ def _run_sync_schedule(args: argparse.Namespace) -> int:
     )
 
     report_rows = [asdict(result) for result in results]
+    _audit_results(audit, result_type="training_schedule", rows=report_rows)
     for row in report_rows:
         error_suffix = f" error={row['error']}" if row.get("error") else ""
         print(
@@ -250,9 +383,12 @@ def _run_sync_schedule(args: argparse.Namespace) -> int:
 
     if args.output:
         _write_report(args.output, report_rows)
+        audit.log("report_written", output=str(args.output))
         print(f"Wrote JSON report: {args.output}")
 
-    print(f"Wrote training sync state: {config.state_dir / 'training_schedule_sync.jsonl'}")
+    _audit_completed(audit, rows=report_rows)
+    print(f"Wrote training sync state: {state_path}")
+    print(f"Wrote audit log: {audit.path}")
     return 0
 
 
@@ -260,7 +396,15 @@ def _run_sync_today_activity(args: argparse.Namespace) -> int:
     if args.direction != CN_TO_GLOBAL:
         raise ValueError("Only cn_to_global is supported for activity sync v1")
     sync_date = parse_date(args.date) if args.date else date.today()
-    config = load_config(args.config)
+    config = load_config(args.config, profile=args.profile)
+    state_path = config.state_dir / "state.sqlite3"
+    audit = _audit_logger(args, config.profile, config.state_dir)
+    _audit_run_started(
+        audit,
+        args,
+        state_path=state_path,
+        sync_date=sync_date.isoformat(),
+    )
 
     source_client = login(config.cn_account)
     target_client = login(config.global_account)
@@ -275,6 +419,7 @@ def _run_sync_today_activity(args: argparse.Namespace) -> int:
     )
 
     report_rows = [asdict(result) for result in results]
+    _audit_results(audit, result_type="activity", rows=report_rows)
     for row in report_rows:
         error_suffix = f" error={row['error']}" if row.get("error") else ""
         print(
@@ -288,9 +433,12 @@ def _run_sync_today_activity(args: argparse.Namespace) -> int:
 
     if args.output:
         _write_report(args.output, report_rows)
+        audit.log("report_written", output=str(args.output))
         print(f"Wrote JSON report: {args.output}")
 
-    print(f"Wrote activity sync state: {config.state_dir / 'activity_sync.jsonl'}")
+    _audit_completed(audit, rows=report_rows)
+    print(f"Wrote activity sync state: {state_path}")
+    print(f"Wrote audit log: {audit.path}")
     return 0
 
 

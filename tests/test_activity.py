@@ -9,6 +9,7 @@ from garmin_sync.activity import (
     sync_activities_for_date,
     validate_activity_direction,
 )
+from garmin_sync.state import JsonlStateStore
 
 
 class FakeDownloadFormat(Enum):
@@ -22,9 +23,13 @@ class FakeActivityClient:
         self,
         activities_by_date: dict[str, list[dict[str, object]]],
         original_bytes: bytes | None = None,
+        upload_response: dict[str, object] | None = None,
+        uploaded_activity: dict[str, object] | None = None,
     ) -> None:
         self.activities_by_date = activities_by_date
         self.original_bytes = original_bytes or _zip_with_fit(b"FIT bytes")
+        self.upload_response = upload_response
+        self.uploaded_activity = uploaded_activity
         self.activity_calls: list[tuple[str, str, str | None]] = []
         self.downloaded: list[tuple[int, FakeDownloadFormat]] = []
         self.uploaded: list[str] = []
@@ -49,6 +54,12 @@ class FakeActivityClient:
 
     def upload_activity(self, activity_path: str) -> dict[str, object]:
         self.uploaded.append(activity_path)
+        if self.uploaded_activity is not None:
+            self.activities_by_date.setdefault("2026-06-11", []).append(
+                self.uploaded_activity
+            )
+        if self.upload_response is not None:
+            return self.upload_response
         return {"detailedImportResult": {"successes": [{"internalId": 9001}]}}
 
 
@@ -111,10 +122,7 @@ def test_sync_activities_reports_no_source_activity(tmp_path) -> None:
     )
 
     assert results[0].status == "no_source_activity"
-    records = [
-        json.loads(line)
-        for line in (tmp_path / "activity_sync.jsonl").read_text().splitlines()
-    ]
+    records = JsonlStateStore(tmp_path, "activity_sync.jsonl").records()
     assert records[0]["status"] == "no_source_activity"
 
 
@@ -134,12 +142,47 @@ def test_sync_activities_uploads_original_fit(tmp_path) -> None:
     assert source.downloaded == [(100, FakeDownloadFormat.ORIGINAL)]
     assert len(target.uploaded) == 1
 
-    records = [
-        json.loads(line)
-        for line in (tmp_path / "activity_sync.jsonl").read_text().splitlines()
-    ]
+    records = JsonlStateStore(tmp_path, "activity_sync.jsonl").records()
     assert records[0]["status"] == "synced"
     assert records[0]["source_activity_id"] == 100
+
+
+def test_sync_activities_verifies_upload_without_response_id(tmp_path) -> None:
+    activity = _activity(activity_id=9002)
+    source = FakeActivityClient({"2026-06-11": [_activity()]})
+    target = FakeActivityClient(
+        {"2026-06-11": []},
+        upload_response={"detailedImportResult": {"successes": []}},
+        uploaded_activity=activity,
+    )
+
+    results = sync_activities_for_date(
+        source,
+        target,
+        date(2026, 6, 11),
+        tmp_path,
+    )
+
+    assert results[0].status == "synced"
+    assert results[0].target_activity_id == 9002
+
+
+def test_sync_activities_rejects_unverified_upload(tmp_path) -> None:
+    source = FakeActivityClient({"2026-06-11": [_activity()]})
+    target = FakeActivityClient(
+        {"2026-06-11": []},
+        upload_response={"detailedImportResult": {"successes": []}},
+    )
+
+    results = sync_activities_for_date(
+        source,
+        target,
+        date(2026, 6, 11),
+        tmp_path,
+    )
+
+    assert results[0].status == "sync_error"
+    assert results[0].target_activity_id is None
 
 
 def test_sync_activities_skips_existing_target_activity(tmp_path) -> None:

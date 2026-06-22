@@ -23,6 +23,7 @@ Implement in phases:
 - Prefer one-way sync first: `global_to_cn` or `cn_to_global`.
 - Avoid enabling both directions until duplicate handling is proven.
 - Use local state to avoid uploading or writing the same data twice.
+- Keep state durable enough to resume after partial writes.
 - Treat activity sync and wellness sync as separate workflows.
 - For activity files, copy the original activity file when possible.
 - For wellness metrics, read and compare first; write only when the endpoint or package method is verified.
@@ -56,6 +57,12 @@ accounts:
     email: your-cn-email@example.cn
     password: your-cn-password
 ```
+
+For multiple account pairs, use named profiles and pass `--profile name` to a
+command. Legacy `accounts` config is treated as profile `default`.
+
+Every command supports `--audit-log path/to/audit.jsonl`; when omitted, audit
+events are appended to `~/.garminsync/profiles/<profile>/audit.jsonl`.
 
 ## Python Package
 
@@ -101,7 +108,8 @@ Activity workflow:
 3. Download original source activity.
 4. Extract `.fit`, `.tcx`, or `.gpx`.
 5. Upload to target.
-6. Record result locally.
+6. Verify the upload by response ID or target re-read.
+7. Record result locally.
 
 ## Wellness Read Endpoints
 
@@ -154,11 +162,16 @@ garmin-sync wellness compare-steps \
 ```
 
 The command is compare-only. It reads steps with `get_daily_steps(date, date)` on both
-accounts, appends hashes and statuses to `~/.garminsync/steps_compare.jsonl`,
+accounts, stores hashes and statuses in profile SQLite state,
 and performs no Garmin writes.
 
 By default it reads `config.yml`; pass `--config path/to/config.yml` to use a
-different local config.
+different local config. Pass `--profile name` to use a named account-pair
+profile.
+
+All flows support `--dry-run`. For read-only wellness flows this is an
+automation-safe marker recorded in audit logs; for training and activity flows it
+prevents Garmin upload/schedule calls.
 
 Steps sync eligibility:
 
@@ -177,6 +190,24 @@ write method, and authenticated `OPTIONS` for Garmin CN
 `/usersummary-service/stats/steps/daily/{date}/{date}` advertises only
 `HEAD,GET,OPTIONS`. Until a real write path is verified, the command records
 `sync_unavailable` and performs no Garmin write.
+
+## Local State
+
+Runtime state is stored in:
+
+```text
+~/.garminsync/profiles/<profile>/state.sqlite3
+```
+
+Existing legacy JSONL files under `~/.garminsync` are imported once for the
+default profile and left in place as backups. Training sync records uploaded CN
+workout IDs before scheduling so retries can resume scheduling instead of
+uploading duplicate workout definitions. Activity sync records `synced` only
+after the target activity is verified.
+
+Audit events are append-only JSONL and include run start, result rows, optional
+report writes, and completion status counts. Do not log passwords, tokens,
+downloaded files, raw Garmin payloads, or MFA values.
 
 ## Suggested Implementation Order
 

@@ -43,9 +43,31 @@ accounts:
 ```
 
 `config.yml` is ignored by git because it contains secrets. Runtime state and
-tokens are always stored under `~/.garminsync`; International and China token
-stores are kept separate under `~/.garminsync/tokens/global` and
-`~/.garminsync/tokens/cn`.
+tokens are stored under `~/.garminsync/profiles/default`; International and
+China token stores are kept separate under
+`~/.garminsync/profiles/default/tokens/global` and
+`~/.garminsync/profiles/default/tokens/cn`.
+
+To manage multiple account pairs, use named profiles:
+
+```yaml
+profile: default
+profiles:
+  default:
+    accounts:
+      global:
+        email: your-global-email@example.com
+        password: your-global-password
+      cn:
+        email: your-cn-email@example.cn
+        password: your-cn-password
+```
+
+Pass `--profile name` to any command to select a configured profile.
+
+All commands write a structured JSONL audit log to
+`~/.garminsync/profiles/<profile>/audit.jsonl` by default. Use
+`--audit-log path/to/audit.jsonl` to write it somewhere else.
 
 ## First Login
 
@@ -95,12 +117,22 @@ Status meanings:
 - `missing_target`: International has data for the date but China returned no steps payload.
 - `read_error`: At least one account failed while reading the steps payload.
 
+`compare-steps --dry-run` is accepted for automation consistency. The flow is
+already Garmin read-only; dry-run is recorded in the audit log and no Garmin
+write methods are called.
+
 ## Sync Steps
 
 Evaluate whether steps should sync from Global to CN:
 
 ```bash
 garmin-sync wellness sync-steps --start 2026-06-10 --end 2026-06-10
+```
+
+Preview mode:
+
+```bash
+garmin-sync wellness sync-steps --dry-run --start 2026-06-10 --end 2026-06-10
 ```
 
 Sync rule:
@@ -152,6 +184,9 @@ The workflow:
 - Skips a workout when CN already has a same-name workout on the same date.
 - Uploads the normalized workout to CN.
 - Schedules the new CN workout on the same date.
+- If upload succeeds but scheduling fails, records the uploaded CN workout ID
+  and resumes scheduling from that ID on the next run instead of uploading a
+  duplicate workout.
 
 Use `--force` to bypass the local-state and same-day same-name duplicate checks:
 
@@ -162,6 +197,7 @@ garmin-sync training sync-schedule --force
 Status meanings:
 
 - `dry_run`: Would upload and schedule the workout, but `--dry-run` prevented writes.
+- `uploaded`: Internal durable state recorded after upload succeeds and before scheduling.
 - `synced`: Workout was uploaded to CN and scheduled on the matching date.
 - `skipped_state`: The same date and workout hash were already synced before.
 - `skipped_existing`: CN already has a same-name scheduled workout on that date.
@@ -198,6 +234,8 @@ The workflow:
 - Downloads the CN original activity ZIP.
 - Extracts the original FIT file.
 - Uploads that FIT file to Global.
+- Records `synced` only when Garmin returns a target activity ID or a target
+  re-read verifies the uploaded activity.
 
 Use `--force` to bypass the local-state and duplicate checks:
 
@@ -217,32 +255,28 @@ Status meanings:
 
 ## Local State
 
-Each compare run appends records to:
+State is stored in SQLite:
 
 ```text
-~/.garminsync/steps_compare.jsonl
+~/.garminsync/profiles/<profile>/state.sqlite3
 ```
 
-Each sync evaluation appends records to:
+On first run for the default profile, existing legacy JSONL state files under
+`~/.garminsync` are imported into SQLite once and left in place as backups.
+State records include the run timestamp, direction, metric/date identifiers,
+status, source/target IDs or hashes, and a short error string when a read or
+sync action fails.
+
+Audit logs are append-only JSONL files:
 
 ```text
-~/.garminsync/steps_sync.jsonl
+~/.garminsync/profiles/<profile>/audit.jsonl
 ```
 
-Each training schedule sync appends records to:
-
-```text
-~/.garminsync/training_schedule_sync.jsonl
-```
-
-Each activity sync appends records to:
-
-```text
-~/.garminsync/activity_sync.jsonl
-```
-
-State records include the run timestamp, direction, metric, date, status, source
-hash, target hash, and a short error string when a read fails.
+Each run logs `run_started`, one `result` event per result row, optional
+`report_written`, and `run_completed` with status counts. Audit rows include the
+profile, command, run ID, direction, dry-run flag, date range, state path, and
+sanitized result fields. They do not include credentials or raw Garmin payloads.
 
 ## Safety
 
@@ -252,8 +286,10 @@ activity sync paths.
 
 Training schedule sync calls Garmin write methods only when `--dry-run` is not
 set. It uploads new CN workout definitions and schedules them on matching dates.
-It does not delete or overwrite CN workouts.
+It records upload progress before scheduling so retries can resume safely. It
+does not delete or overwrite CN workouts.
 
 Activity sync calls Garmin write methods only when `--dry-run` is not set. It
 uploads extracted FIT activity files to Global. It does not delete or overwrite
-Global activities.
+Global activities. Ambiguous upload responses are treated as `sync_error` unless
+the target account confirms the uploaded activity.
