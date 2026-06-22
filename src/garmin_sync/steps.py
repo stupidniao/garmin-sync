@@ -9,6 +9,7 @@ from typing import Any
 
 from garmin_sync.dates import inclusive_dates
 from garmin_sync.normalize import is_missing_payload, payload_hash
+from garmin_sync.retry import retry_read
 from garmin_sync.state import (
     CompareStateRecord,
     JsonlStateStore,
@@ -68,7 +69,9 @@ def read_steps(client: Any, day: date) -> MetricRead:
 
     try:
         date_str = day.isoformat()
-        return MetricRead(payload=client.get_daily_steps(date_str, date_str))
+        return MetricRead(
+            payload=retry_read(lambda: client.get_daily_steps(date_str, date_str))
+        )
     except Exception as exc:  # Garmin exceptions vary by installed package version.
         return MetricRead(error=f"{type(exc).__name__}: {exc}")
 

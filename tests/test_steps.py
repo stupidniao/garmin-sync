@@ -13,6 +13,7 @@ from garmin_sync.steps import (
     sync_steps_range,
     validate_direction,
 )
+from garmin_sync.state import JsonlStateStore
 
 
 class FakeClient:
@@ -122,10 +123,7 @@ def test_compare_steps_range_persists_state_without_raw_payloads(tmp_path) -> No
     )
 
     assert [result.status for result in results] == ["same", "missing_target"]
-    records = [
-        json.loads(line)
-        for line in (tmp_path / "steps_compare.jsonl").read_text().splitlines()
-    ]
+    records = JsonlStateStore(tmp_path, "steps_compare.jsonl").records()
     assert len(records) == 2
     assert records[0]["metric"] == "steps"
     assert "password" not in json.dumps(records)
@@ -176,10 +174,7 @@ def test_sync_steps_range_persists_sync_decision(tmp_path) -> None:
     )
 
     assert results[0].status == "sync_unavailable"
-    records = [
-        json.loads(line)
-        for line in (tmp_path / "steps_sync.jsonl").read_text().splitlines()
-    ]
+    records = JsonlStateStore(tmp_path, "steps_sync.jsonl").records()
     assert records[0]["source_steps"] == 16710
     assert records[0]["target_steps"] is None
     assert records[0]["steps_to_sync"] == 16710

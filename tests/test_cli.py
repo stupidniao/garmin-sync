@@ -1,4 +1,10 @@
-from garmin_sync.cli import main
+import json
+
+import garmin_sync.cli as cli
+from garmin_sync.config import AccountConfig, AppConfig
+from garmin_sync.steps import CompareResult
+
+main = cli.main
 
 
 def test_cli_help_for_compare_steps(capsys) -> None:
@@ -11,6 +17,9 @@ def test_cli_help_for_compare_steps(capsys) -> None:
     assert "compare-steps" in output
     assert "--start" in output
     assert "--end" in output
+    assert "--profile" in output
+    assert "--dry-run" in output
+    assert "--audit-log" in output
 
 
 def test_cli_help_for_sync_steps(capsys) -> None:
@@ -23,6 +32,9 @@ def test_cli_help_for_sync_steps(capsys) -> None:
     assert "sync-steps" in output
     assert "--start" in output
     assert "--end" in output
+    assert "--profile" in output
+    assert "--dry-run" in output
+    assert "--audit-log" in output
 
 
 def test_cli_help_for_sync_schedule(capsys) -> None:
@@ -35,6 +47,8 @@ def test_cli_help_for_sync_schedule(capsys) -> None:
     assert "sync-schedule" in output
     assert "--dry-run" in output
     assert "--force" in output
+    assert "--profile" in output
+    assert "--audit-log" in output
 
 
 def test_cli_help_for_sync_today_activity(capsys) -> None:
@@ -47,6 +61,8 @@ def test_cli_help_for_sync_today_activity(capsys) -> None:
     assert "sync-today" in output
     assert "--dry-run" in output
     assert "--date" in output
+    assert "--profile" in output
+    assert "--audit-log" in output
 
 
 def test_cli_rejects_unsupported_direction(capsys) -> None:
@@ -83,3 +99,64 @@ def test_cli_reports_missing_config(capsys) -> None:
 
     assert exit_code == 2
     assert "Config file not found" in capsys.readouterr().err
+
+
+def test_cli_writes_structured_audit_log(monkeypatch, tmp_path, capsys) -> None:
+    config = AppConfig(
+        profile="default",
+        global_account=AccountConfig(
+            email="global@example.com",
+            password="global-password",
+            tokenstore=tmp_path / "tokens/global",
+            is_cn=False,
+        ),
+        cn_account=AccountConfig(
+            email="cn@example.com",
+            password="cn-password",
+            tokenstore=tmp_path / "tokens/cn",
+            is_cn=True,
+        ),
+        state_dir=tmp_path,
+    )
+    audit_path = tmp_path / "audit.jsonl"
+
+    monkeypatch.setattr(cli, "load_config", lambda path, profile=None: config)
+    monkeypatch.setattr(cli, "login", lambda account: object())
+    monkeypatch.setattr(
+        cli,
+        "compare_steps_range",
+        lambda **kwargs: [
+            CompareResult(
+                date="2026-06-11",
+                status="same",
+                source_hash="source-hash",
+                target_hash="source-hash",
+            )
+        ],
+    )
+
+    exit_code = main(
+        [
+            "wellness",
+            "compare-steps",
+            "--start",
+            "2026-06-11",
+            "--end",
+            "2026-06-11",
+            "--dry-run",
+            "--audit-log",
+            str(audit_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert "Wrote audit log" in capsys.readouterr().out
+    rows = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    assert [row["event"] for row in rows] == [
+        "run_started",
+        "result",
+        "run_completed",
+    ]
+    assert rows[0]["dry_run"] is True
+    assert rows[1]["result"]["status"] == "same"
+    assert "password" not in json.dumps(rows)

@@ -10,6 +10,7 @@ from typing import Any
 
 from garmin_sync.dates import month_keys
 from garmin_sync.normalize import payload_hash
+from garmin_sync.retry import retry_read
 from garmin_sync.state import (
     JsonlStateStore,
     TrainingScheduleStateRecord,
@@ -68,7 +69,7 @@ def fetch_scheduled_workouts_range(
 
     by_schedule_id: dict[int, ScheduledWorkout] = {}
     for year, month in month_keys(start, end):
-        payload = client.get_scheduled_workouts(year, month)
+        payload = retry_read(lambda: client.get_scheduled_workouts(year, month))
         if not isinstance(payload, dict):
             continue
         for item in payload.get("calendarItems", []):
@@ -119,7 +120,9 @@ def sync_training_schedule_range(
 
     validate_direction(direction)
     state_store = JsonlStateStore(state_dir, STATE_FILENAME)
-    synced_hashes = _synced_hashes(state_store)
+    existing_records = state_store.records()
+    synced_hashes = _synced_hashes(existing_records)
+    pending_uploads = _pending_uploaded_workouts(existing_records)
     run_timestamp = utc_timestamp()
     results: list[TrainingSyncResult] = []
 
@@ -147,10 +150,20 @@ def sync_training_schedule_range(
             scheduled=scheduled,
             synced_hashes=synced_hashes,
             target_names_by_date=target_names_by_date,
+            pending_uploads=pending_uploads,
+            state_store=state_store,
+            run_timestamp=run_timestamp,
+            direction=direction,
             dry_run=dry_run,
             force=force,
         )
         _append_training_record(state_store, run_timestamp, direction, result)
+        if result.status == "synced" and result.workout_hash is not None:
+            synced_hashes.add((result.date, result.workout_hash))
+            if result.workout_name:
+                target_names_by_date.setdefault(result.date, set()).add(result.workout_name)
+        if result.target_workout_id is not None and result.workout_hash is not None:
+            pending_uploads[(result.date, result.workout_hash)] = result.target_workout_id
         results.append(result)
 
     return results
@@ -162,11 +175,17 @@ def _sync_one_scheduled_workout(
     scheduled: ScheduledWorkout,
     synced_hashes: set[tuple[str, str]],
     target_names_by_date: dict[str, set[str]],
+    pending_uploads: dict[tuple[str, str], int],
+    state_store: JsonlStateStore,
+    run_timestamp: str,
+    direction: str,
     dry_run: bool,
     force: bool,
 ) -> TrainingSyncResult:
     try:
-        source_workout = source_client.get_workout_by_id(scheduled.workout_id)
+        source_workout = retry_read(
+            lambda: source_client.get_workout_by_id(scheduled.workout_id)
+        )
     except Exception as exc:
         return TrainingSyncResult(
             date=scheduled.date,
@@ -228,21 +247,35 @@ def _sync_one_scheduled_workout(
             source_workout_id=scheduled.workout_id,
         )
 
-    try:
-        upload_result = target_client.upload_workout(normalized)
-        target_workout_id = _extract_workout_id(upload_result)
-        if target_workout_id is None:
-            raise ValueError("CN upload response did not include workoutId")
-    except Exception as exc:
-        return TrainingSyncResult(
+    target_workout_id = (
+        None if force else pending_uploads.get((scheduled.date, identity_hash))
+    )
+    if target_workout_id is None:
+        try:
+            upload_result = target_client.upload_workout(normalized)
+            target_workout_id = _extract_workout_id(upload_result)
+            if target_workout_id is None:
+                raise ValueError("CN upload response did not include workoutId")
+        except Exception as exc:
+            return TrainingSyncResult(
+                date=scheduled.date,
+                status="upload_error",
+                workout_name=name,
+                workout_hash=identity_hash,
+                source_scheduled_workout_id=scheduled.scheduled_workout_id,
+                source_workout_id=scheduled.workout_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        uploaded_result = TrainingSyncResult(
             date=scheduled.date,
-            status="upload_error",
+            status="uploaded",
             workout_name=name,
             workout_hash=identity_hash,
             source_scheduled_workout_id=scheduled.scheduled_workout_id,
             source_workout_id=scheduled.workout_id,
-            error=f"{type(exc).__name__}: {exc}",
+            target_workout_id=target_workout_id,
         )
+        _append_training_record(state_store, run_timestamp, direction, uploaded_result)
 
     try:
         schedule_result = target_client.schedule_workout(
@@ -326,9 +359,9 @@ def _names_by_date(scheduled_workouts: list[ScheduledWorkout]) -> dict[str, set[
     return names
 
 
-def _synced_hashes(state_store: JsonlStateStore) -> set[tuple[str, str]]:
+def _synced_hashes(records: list[dict[str, object]]) -> set[tuple[str, str]]:
     synced: set[tuple[str, str]] = set()
-    for record in state_store.records():
+    for record in records:
         if record.get("status") != "synced":
             continue
         date_value = record.get("date")
@@ -336,6 +369,25 @@ def _synced_hashes(state_store: JsonlStateStore) -> set[tuple[str, str]]:
         if isinstance(date_value, str) and isinstance(hash_value, str):
             synced.add((date_value, hash_value))
     return synced
+
+
+def _pending_uploaded_workouts(
+    records: list[dict[str, object]],
+) -> dict[tuple[str, str], int]:
+    pending: dict[tuple[str, str], int] = {}
+    for record in records:
+        if record.get("status") not in {"uploaded", "schedule_error"}:
+            continue
+        date_value = record.get("date")
+        hash_value = record.get("workout_hash")
+        target_workout_id = record.get("target_workout_id")
+        if (
+            isinstance(date_value, str)
+            and isinstance(hash_value, str)
+            and isinstance(target_workout_id, int)
+        ):
+            pending[(date_value, hash_value)] = target_workout_id
+    return pending
 
 
 def _extract_workout_id(payload: Any) -> int | None:

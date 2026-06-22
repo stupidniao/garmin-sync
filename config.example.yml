@@ -9,3 +9,16 @@ accounts:
   cn:
     email: your-cn-email@example.cn
     password: your-cn-password
+
+# Optional multi-profile format:
+#
+# profile: default
+# profiles:
+#   default:
+#     accounts:
+#       global:
+#         email: your-global-email@example.com
+#         password: your-global-password
+#       cn:
+#         email: your-cn-email@example.cn
+#         password: your-cn-password

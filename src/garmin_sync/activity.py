@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from garmin_sync.retry import retry_read
 from garmin_sync.state import ActivitySyncStateRecord, JsonlStateStore, utc_timestamp
 
 CN_TO_GLOBAL = "cn_to_global"
@@ -66,8 +67,11 @@ def sync_activities_for_date(
         _append_activity_record(store, run_timestamp, direction, result)
         return [result]
 
-    target_keys = {_activity_dedupe_key(activity) for activity in target_activities}
-    target_keys.discard(None)
+    target_keys = {
+        key
+        for activity in target_activities
+        if (key := _activity_dedupe_key(activity)) is not None
+    }
     synced_source_ids = _synced_source_ids(store)
     results: list[ActivitySyncResult] = []
 
@@ -92,6 +96,11 @@ def sync_activities_for_date(
             force=force,
         )
         _append_activity_record(store, run_timestamp, direction, result)
+        if result.status == "synced" and result.source_activity_id is not None:
+            synced_source_ids.add(result.source_activity_id)
+            key = (result.start_time_local, result.activity_name)
+            if key[0] is not None and key[1] is not None:
+                target_keys.add(key)
         results.append(result)
 
     return results
@@ -126,7 +135,7 @@ def _sync_one_activity(
     target_client: Any,
     activity: dict[str, Any],
     date_str: str,
-    target_keys: set[tuple[str | None, str | None]],
+    target_keys: set[tuple[str, str]],
     synced_source_ids: set[int],
     dry_run: bool,
     force: bool,
@@ -155,7 +164,7 @@ def _sync_one_activity(
         )
 
     dedupe_key = _activity_dedupe_key(activity)
-    if not force and dedupe_key in target_keys:
+    if not force and dedupe_key is not None and dedupe_key in target_keys:
         return ActivitySyncResult(
             date=date_str,
             status="skipped_existing",
@@ -194,30 +203,57 @@ def _sync_one_activity(
             error=f"{type(exc).__name__}: {exc}",
         )
 
+    try:
+        target_activity_id = _target_activity_id(upload_result)
+        if target_activity_id is None:
+            target_activity_id = _verify_uploaded_activity(
+                target_client,
+                date_str,
+                activity_name,
+                start_time_local,
+            )
+        if target_activity_id is None:
+            raise ValueError("Target upload response did not include a verified activity id")
+    except Exception as exc:
+        return ActivitySyncResult(
+            date=date_str,
+            status="sync_error",
+            source_activity_id=activity_id,
+            activity_name=activity_name,
+            start_time_local=start_time_local,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
     return ActivitySyncResult(
         date=date_str,
         status="synced",
         source_activity_id=activity_id,
-        target_activity_id=_target_activity_id(upload_result),
+        target_activity_id=target_activity_id,
         activity_name=activity_name,
         start_time_local=start_time_local,
     )
 
 
 def _activities_for_date(client: Any, date_str: str) -> list[dict[str, Any]]:
-    payload = client.get_activities_by_date(date_str, date_str, sortorder="asc")
+    payload = retry_read(
+        lambda: client.get_activities_by_date(date_str, date_str, sortorder="asc")
+    )
     if not isinstance(payload, list):
         raise ValueError("Activities payload was not a list")
     return [activity for activity in payload if isinstance(activity, dict)]
 
 
-def _activity_dedupe_key(activity: dict[str, Any]) -> tuple[str | None, str | None]:
-    return (_start_time_local(activity), _activity_name(activity))
+def _activity_dedupe_key(activity: dict[str, Any]) -> tuple[str, str] | None:
+    start_time_local = _start_time_local(activity)
+    activity_name = _activity_name(activity)
+    if start_time_local is None or activity_name is None:
+        return None
+    return (start_time_local, activity_name)
 
 
 def _activity_id(activity: dict[str, Any]) -> int | None:
     value = activity.get("activityId")
-    return int(value) if value is not None else None
+    return _int_or_none(value)
 
 
 def _target_activity_id(upload_result: Any) -> int | None:
@@ -235,7 +271,26 @@ def _target_activity_id(upload_result: Any) -> int | None:
             candidates.append(successes[0].get("internalId"))
     for value in candidates:
         if value is not None:
-            return int(value)
+            parsed = _int_or_none(value)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _verify_uploaded_activity(
+    target_client: Any,
+    date_str: str,
+    activity_name: str | None,
+    start_time_local: str | None,
+) -> int | None:
+    if activity_name is None or start_time_local is None:
+        return None
+    for activity in _activities_for_date(target_client, date_str):
+        if (
+            _activity_name(activity) == activity_name
+            and _start_time_local(activity) == start_time_local
+        ):
+            return _activity_id(activity)
     return None
 
 
@@ -247,6 +302,13 @@ def _activity_name(activity: dict[str, Any]) -> str | None:
 def _start_time_local(activity: dict[str, Any]) -> str | None:
     value = activity.get("startTimeLocal")
     return str(value) if value else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _synced_source_ids(store: JsonlStateStore) -> set[int]:

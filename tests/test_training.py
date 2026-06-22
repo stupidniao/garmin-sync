@@ -7,6 +7,7 @@ from garmin_sync.training import (
     sync_training_schedule_range,
     workout_identity_hash,
 )
+from garmin_sync.state import JsonlStateStore
 
 
 class FakeTrainingClient:
@@ -14,9 +15,11 @@ class FakeTrainingClient:
         self,
         schedules: dict[tuple[int, int], dict[str, object]],
         workouts: dict[int, dict[str, object]] | None = None,
+        schedule_failures: int = 0,
     ) -> None:
         self.schedules = schedules
         self.workouts = workouts or {}
+        self.schedule_failures = schedule_failures
         self.schedule_calls: list[tuple[int, int]] = []
         self.uploaded: list[dict[str, object]] = []
         self.scheduled: list[tuple[int, str]] = []
@@ -33,6 +36,9 @@ class FakeTrainingClient:
         return {"workoutId": 9000 + len(self.uploaded)}
 
     def schedule_workout(self, workout_id: int, date_str: str) -> dict[str, int]:
+        if self.schedule_failures:
+            self.schedule_failures -= 1
+            raise RuntimeError("schedule failed")
         self.scheduled.append((workout_id, date_str))
         return {"workoutScheduleId": 8000 + len(self.scheduled)}
 
@@ -164,10 +170,7 @@ def test_sync_training_schedule_uploads_and_schedules_workout(tmp_path) -> None:
     assert results[0].target_scheduled_workout_id == 8001
     assert target.scheduled == [(9001, "2026-06-11")]
 
-    records = [
-        json.loads(line)
-        for line in (tmp_path / "training_schedule_sync.jsonl").read_text().splitlines()
-    ]
+    records = JsonlStateStore(tmp_path, "training_schedule_sync.jsonl").records()
     assert records[0]["status"] == "synced"
     assert records[0]["workout_name"] == "Easy Run"
     assert "password" not in json.dumps(records)
@@ -224,3 +227,60 @@ def test_sync_training_schedule_skips_previously_synced_hash(tmp_path) -> None:
 
     assert results[0].status == "skipped_state"
     assert target.uploaded == []
+
+
+def test_sync_training_schedule_resumes_after_schedule_error(tmp_path) -> None:
+    source = FakeTrainingClient(
+        {(2026, 6): {"calendarItems": [_calendar_item(date_str="2026-06-11")]}},
+        {200: _workout()},
+    )
+    target = FakeTrainingClient(
+        {(2026, 6): {"calendarItems": []}},
+        schedule_failures=1,
+    )
+
+    first_results = sync_training_schedule_range(
+        source,
+        target,
+        date(2026, 6, 11),
+        date(2026, 6, 11),
+        tmp_path,
+    )
+    second_results = sync_training_schedule_range(
+        source,
+        target,
+        date(2026, 6, 11),
+        date(2026, 6, 11),
+        tmp_path,
+    )
+
+    assert first_results[0].status == "schedule_error"
+    assert second_results[0].status == "synced"
+    assert len(target.uploaded) == 1
+    assert target.scheduled == [(9001, "2026-06-11")]
+
+
+def test_sync_training_schedule_dedupes_duplicate_source_rows_in_one_run(tmp_path) -> None:
+    source = FakeTrainingClient(
+        {
+            (2026, 6): {
+                "calendarItems": [
+                    _calendar_item(date_str="2026-06-11", schedule_id=100),
+                    _calendar_item(date_str="2026-06-11", schedule_id=101),
+                ]
+            }
+        },
+        {200: _workout()},
+    )
+    target = FakeTrainingClient({(2026, 6): {"calendarItems": []}})
+
+    results = sync_training_schedule_range(
+        source,
+        target,
+        date(2026, 6, 11),
+        date(2026, 6, 11),
+        tmp_path,
+    )
+
+    assert [result.status for result in results] == ["synced", "skipped_state"]
+    assert len(target.uploaded) == 1
