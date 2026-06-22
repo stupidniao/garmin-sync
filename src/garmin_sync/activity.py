@@ -515,8 +515,6 @@ def _training_workout_id_map(state_dir: Path) -> dict[int, int]:
 
     workout_ids: dict[int, int] = {}
     for record in read_existing_state_records(state_dir, TRAINING_STATE_FILENAME):
-        if record.get("status") not in {"synced", "uploaded", "schedule_error"}:
-            continue
         cn_workout_id = _int_or_none(record.get("target_workout_id"))
         global_workout_id = _int_or_none(record.get("source_workout_id"))
         if cn_workout_id is not None and global_workout_id is not None:

@@ -218,6 +218,35 @@ def test_sync_activities_links_target_to_global_workout_from_training_history(
     assert records[0]["workout_link_status"] == "linked"
 
 
+def test_sync_activities_uses_skipped_training_history_with_workout_ids(
+    tmp_path,
+) -> None:
+    (tmp_path / "training_schedule_sync.jsonl").write_text(
+        json.dumps(
+            {
+                "status": "skipped_state",
+                "source_workout_id": 200,
+                "target_workout_id": 9000,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    source = FakeActivityClient({"2026-06-11": [_activity(workout_id=9000)]})
+    target = FakeActivityClient({"2026-06-11": []})
+
+    results = sync_activities_for_date(
+        source,
+        target,
+        date(2026, 6, 11),
+        tmp_path,
+    )
+
+    assert results[0].status == "synced"
+    assert results[0].target_workout_id == 200
+    assert results[0].workout_link_status == "linked"
+
+
 def test_sync_activities_dry_run_maps_workout_without_local_state_write(
     tmp_path,
 ) -> None:
