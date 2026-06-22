@@ -437,7 +437,9 @@ def _run_sync_today_activity(args: argparse.Namespace) -> int:
         error_suffix = f" error={row['error']}" if row.get("error") else ""
         print(
             "{date} activity {status} source_activity={source_activity_id} "
-            "target_activity={target_activity_id} start={start_time_local} "
+            "target_activity={target_activity_id} source_workout={source_workout_id} "
+            "target_workout={target_workout_id} workout_link={workout_link_status} "
+            "start={start_time_local} "
             "name={activity_name}{error_suffix}".format(
                 error_suffix=error_suffix,
                 **row,

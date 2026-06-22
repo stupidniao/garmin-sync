@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 from garmin_sync.state import JsonlStateStore
 
@@ -49,3 +50,35 @@ def test_legacy_training_state_preserves_duplicate_skip(tmp_path) -> None:
 
     assert records[0]["status"] == "synced"
     assert records[0]["workout_hash"] == "abc"
+
+
+def test_activity_state_adds_workout_columns_to_existing_sqlite(tmp_path) -> None:
+    with sqlite3.connect(tmp_path / "state.sqlite3") as connection:
+        connection.execute(
+            """
+            CREATE TABLE activity_sync (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_timestamp TEXT,
+                direction TEXT,
+                date TEXT,
+                status TEXT,
+                source_activity_id INTEGER,
+                target_activity_id INTEGER,
+                activity_name TEXT,
+                start_time_local TEXT,
+                error TEXT,
+                UNIQUE(direction, source_activity_id)
+            )
+            """
+        )
+
+    JsonlStateStore(tmp_path, "activity_sync.jsonl")
+
+    with sqlite3.connect(tmp_path / "state.sqlite3") as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(activity_sync)")
+        }
+
+    assert "source_workout_id" in columns
+    assert "target_workout_id" in columns
+    assert "workout_link_status" in columns

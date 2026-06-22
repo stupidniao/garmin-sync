@@ -66,6 +66,9 @@ class ActivitySyncStateRecord:
     status: str
     source_activity_id: int | None
     target_activity_id: int | None = None
+    source_workout_id: int | None = None
+    target_workout_id: int | None = None
+    workout_link_status: str | None = None
     activity_name: str | None = None
     start_time_local: str | None = None
     error: str | None = None
@@ -137,6 +140,32 @@ def utc_timestamp() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
+def read_existing_state_records(state_dir: Path, filename: str) -> list[dict[str, object]]:
+    """Read state records without creating or migrating local state."""
+
+    sqlite_path = state_dir / "state.sqlite3"
+    if sqlite_path.exists():
+        table = _table_for_filename(filename)
+        uri = f"file:{sqlite_path}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as connection:
+            connection.row_factory = sqlite3.Row
+            table_exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()
+            if table_exists is not None:
+                rows = connection.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
+                records = [_row_to_record(row) for row in rows]
+                if records:
+                    return records
+
+    records: list[dict[str, object]] = []
+    for path in _legacy_jsonl_paths(state_dir, filename):
+        if path.exists():
+            records.extend(_read_jsonl_records(path))
+    return records
+
+
 def _table_for_filename(filename: str) -> str:
     tables = {
         "steps_compare.jsonl": "steps_compare",
@@ -204,6 +233,9 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             status TEXT,
             source_activity_id INTEGER,
             target_activity_id INTEGER,
+            source_workout_id INTEGER,
+            target_workout_id INTEGER,
+            workout_link_status TEXT,
             activity_name TEXT,
             start_time_local TEXT,
             error TEXT,
@@ -211,6 +243,29 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_columns(
+        connection,
+        "activity_sync",
+        {
+            "source_workout_id": "INTEGER",
+            "target_workout_id": "INTEGER",
+            "workout_link_status": "TEXT",
+        },
+    )
+
+
+def _ensure_columns(
+    connection: sqlite3.Connection,
+    table: str,
+    columns: dict[str, str],
+) -> None:
+    existing = {
+        row["name"]
+        for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    for name, column_type in columns.items():
+        if name not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {column_type}")
 
 
 def _migrate_legacy_jsonl(
@@ -363,8 +418,9 @@ def _upsert_activity(connection: sqlite3.Connection, row: dict[str, Any]) -> Non
         """
         INSERT INTO activity_sync(
             run_timestamp, direction, date, status, source_activity_id,
-            target_activity_id, activity_name, start_time_local, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            target_activity_id, source_workout_id, target_workout_id,
+            workout_link_status, activity_name, start_time_local, error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(direction, source_activity_id) DO UPDATE SET
             run_timestamp = excluded.run_timestamp,
             date = excluded.date,
@@ -373,6 +429,15 @@ def _upsert_activity(connection: sqlite3.Connection, row: dict[str, Any]) -> Non
                 excluded.target_activity_id,
                 activity_sync.target_activity_id
             ),
+            source_workout_id = COALESCE(
+                excluded.source_workout_id,
+                activity_sync.source_workout_id
+            ),
+            target_workout_id = COALESCE(
+                excluded.target_workout_id,
+                activity_sync.target_workout_id
+            ),
+            workout_link_status = excluded.workout_link_status,
             activity_name = excluded.activity_name,
             start_time_local = excluded.start_time_local,
             error = excluded.error
@@ -384,6 +449,9 @@ def _upsert_activity(connection: sqlite3.Connection, row: dict[str, Any]) -> Non
             row.get("status"),
             row.get("source_activity_id"),
             row.get("target_activity_id"),
+            row.get("source_workout_id"),
+            row.get("target_workout_id"),
+            row.get("workout_link_status"),
             row.get("activity_name"),
             row.get("start_time_local"),
             row.get("error"),

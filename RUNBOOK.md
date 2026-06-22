@@ -89,6 +89,8 @@ International:
 
 ```text
 GET  https://connectapi.garmin.com/activitylist-service/activities/search/activities
+GET  https://connectapi.garmin.com/activity-service/activity/{activity_id}
+PUT  https://connectapi.garmin.com/activity-service/activity/{activity_id}
 GET  https://connectapi.garmin.com/download-service/files/activity/{activity_id}
 POST https://connectapi.garmin.com/upload-service/upload
 ```
@@ -97,6 +99,7 @@ China:
 
 ```text
 GET  https://connectapi.garmin.cn/activitylist-service/activities/search/activities
+GET  https://connectapi.garmin.cn/activity-service/activity/{activity_id}
 GET  https://connectapi.garmin.cn/download-service/files/activity/{activity_id}
 POST https://connectapi.garmin.cn/upload-service/upload
 ```
@@ -109,7 +112,10 @@ Activity workflow:
 4. Extract `.fit`, `.tcx`, or `.gpx`.
 5. Upload to target.
 6. Verify the upload by response ID or target re-read.
-7. Record result locally.
+7. Map the CN activity workout ID through training sync history to the original
+   Global workout ID.
+8. Update and verify the Global activity workout link when a mapping exists.
+9. Record result locally.
 
 ## Wellness Read Endpoints
 
@@ -203,7 +209,8 @@ Existing legacy JSONL files under `~/.garminsync` are imported once for the
 default profile and left in place as backups. Training sync records uploaded CN
 workout IDs before scheduling so retries can resume scheduling instead of
 uploading duplicate workout definitions. Activity sync records `synced` only
-after the target activity is verified.
+after the target activity is verified and any mapped Global workout link is
+verified on the target activity.
 
 Audit events are append-only JSONL and include run start, result rows, optional
 report writes, and completion status counts. Do not log passwords, tokens,

@@ -232,13 +232,18 @@ The workflow:
 
 - Reads CN activities for the selected date.
 - Reads Global activities for the same date.
+- Reads training sync history to map the CN activity workout ID back to the
+  original Global workout ID.
 - Skips an activity when Global already has the same start time and name.
 - Skips source activities already synced in local state.
 - Downloads the CN original activity ZIP.
 - Extracts the original FIT file.
 - Uploads that FIT file to Global.
+- Updates the uploaded or existing Global activity to point at the original
+  Global workout ID when a training history mapping exists.
 - Records `synced` only when Garmin returns a target activity ID or a target
-  re-read verifies the uploaded activity.
+  re-read verifies the uploaded activity, and any required workout link is
+  verified on the target activity.
 
 Use `--force` to bypass the local-state and duplicate checks:
 
@@ -249,10 +254,15 @@ garmin-sync activity sync-today --force
 Status meanings:
 
 - `dry_run`: Would download and upload the activity, but `--dry-run` prevented Garmin writes and local state writes.
-- `synced`: Activity was downloaded from CN and uploaded to Global.
+- `synced`: Activity was downloaded from CN, uploaded to Global, and any
+  mapped workout link was verified.
 - `no_source_activity`: CN has no activities on the selected date.
 - `skipped_state`: The source activity was already synced before.
 - `skipped_existing`: Global already has a same-start-time same-name activity.
+- `workout_link_missing`: The activity exists in Global, but the CN workout ID
+  was not mapped to a Global workout ID in training sync history.
+- `workout_link_error`: The activity exists in Global, but updating or verifying
+  the Global workout link failed.
 - `read_error`: Reading source or target activities failed.
 - `sync_error`: Download, FIT extraction, or upload failed.
 
@@ -298,6 +308,7 @@ CN workouts.
 
 Activity sync calls Garmin write methods only when `--dry-run` is not set. It
 also skips local state writes in dry-run. Non-dry-run uploads extracted FIT
-activity files to Global. It does not delete or overwrite Global activities.
-Ambiguous upload responses are treated as `sync_error` unless the target account
-confirms the uploaded activity.
+activity files to Global and, when training history provides a mapping, updates
+the Global activity workout link to the original Global workout ID. It does not
+delete or overwrite Global activities. Ambiguous upload responses are treated as
+`sync_error` unless the target account confirms the uploaded activity.
