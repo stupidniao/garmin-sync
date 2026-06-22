@@ -142,7 +142,7 @@ Wellness workflow:
 1. Read source metric by date.
 2. Read target metric by date.
 3. Compare normalized values.
-4. Store local sync state.
+4. Store local sync state unless this is a dry-run.
 5. Add writes only for metrics with verified write support.
 
 Current implemented workflow:
@@ -171,7 +171,7 @@ profile.
 
 All flows support `--dry-run`. For read-only wellness flows this is an
 automation-safe marker recorded in audit logs; for training and activity flows it
-prevents Garmin upload/schedule calls.
+prevents Garmin upload/schedule calls. Dry-run never writes local SQLite state.
 
 Steps sync eligibility:
 

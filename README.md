@@ -119,7 +119,7 @@ Status meanings:
 
 `compare-steps --dry-run` is accepted for automation consistency. The flow is
 already Garmin read-only; dry-run is recorded in the audit log and no Garmin
-write methods are called.
+write methods or local state writes are performed.
 
 ## Sync Steps
 
@@ -134,6 +134,9 @@ Preview mode:
 ```bash
 garmin-sync wellness sync-steps --dry-run --start 2026-06-10 --end 2026-06-10
 ```
+
+Dry-run evaluates the same reads and decisions but does not write local SQLite
+state.
 
 Sync rule:
 
@@ -196,7 +199,7 @@ garmin-sync training sync-schedule --force
 
 Status meanings:
 
-- `dry_run`: Would upload and schedule the workout, but `--dry-run` prevented writes.
+- `dry_run`: Would upload and schedule the workout, but `--dry-run` prevented Garmin writes and local state writes.
 - `uploaded`: Internal durable state recorded after upload succeeds and before scheduling.
 - `synced`: Workout was uploaded to CN and scheduled on the matching date.
 - `skipped_state`: The same date and workout hash were already synced before.
@@ -245,7 +248,7 @@ garmin-sync activity sync-today --force
 
 Status meanings:
 
-- `dry_run`: Would download and upload the activity, but `--dry-run` prevented writes.
+- `dry_run`: Would download and upload the activity, but `--dry-run` prevented Garmin writes and local state writes.
 - `synced`: Activity was downloaded from CN and uploaded to Global.
 - `no_source_activity`: CN has no activities on the selected date.
 - `skipped_state`: The source activity was already synced before.
@@ -267,6 +270,9 @@ State records include the run timestamp, direction, metric/date identifiers,
 status, source/target IDs or hashes, and a short error string when a read or
 sync action fails.
 
+Dry-run commands do not write SQLite state. They still write audit log events so
+you can review what would have happened.
+
 Audit logs are append-only JSONL files:
 
 ```text
@@ -285,11 +291,13 @@ They do not call Garmin write methods, upload endpoints, delete endpoints, or
 activity sync paths.
 
 Training schedule sync calls Garmin write methods only when `--dry-run` is not
-set. It uploads new CN workout definitions and schedules them on matching dates.
-It records upload progress before scheduling so retries can resume safely. It
-does not delete or overwrite CN workouts.
+set. Dry-run also skips local state writes. Non-dry-run uploads new CN workout
+definitions and schedules them on matching dates. It records upload progress
+before scheduling so retries can resume safely. It does not delete or overwrite
+CN workouts.
 
 Activity sync calls Garmin write methods only when `--dry-run` is not set. It
-uploads extracted FIT activity files to Global. It does not delete or overwrite
-Global activities. Ambiguous upload responses are treated as `sync_error` unless
-the target account confirms the uploaded activity.
+also skips local state writes in dry-run. Non-dry-run uploads extracted FIT
+activity files to Global. It does not delete or overwrite Global activities.
+Ambiguous upload responses are treated as `sync_error` unless the target account
+confirms the uploaded activity.

@@ -150,7 +150,9 @@ def test_cli_writes_structured_audit_log(monkeypatch, tmp_path, capsys) -> None:
     )
 
     assert exit_code == 0
-    assert "Wrote audit log" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Wrote audit log" in output
+    assert "Dry run: skipped compare state write" in output
     rows = [json.loads(line) for line in audit_path.read_text().splitlines()]
     assert [row["event"] for row in rows] == [
         "run_started",
@@ -160,3 +162,54 @@ def test_cli_writes_structured_audit_log(monkeypatch, tmp_path, capsys) -> None:
     assert rows[0]["dry_run"] is True
     assert rows[1]["result"]["status"] == "same"
     assert "password" not in json.dumps(rows)
+
+
+def test_cli_passes_persist_false_for_dry_run(monkeypatch, tmp_path) -> None:
+    config = AppConfig(
+        profile="default",
+        global_account=AccountConfig(
+            email="global@example.com",
+            password="global-password",
+            tokenstore=tmp_path / "tokens/global",
+            is_cn=False,
+        ),
+        cn_account=AccountConfig(
+            email="cn@example.com",
+            password="cn-password",
+            tokenstore=tmp_path / "tokens/cn",
+            is_cn=True,
+        ),
+        state_dir=tmp_path,
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "load_config", lambda path, profile=None: config)
+    monkeypatch.setattr(cli, "login", lambda account: object())
+
+    def fake_compare_steps_range(**kwargs):
+        captured.update(kwargs)
+        return [
+            CompareResult(
+                date="2026-06-11",
+                status="same",
+                source_hash="source-hash",
+                target_hash="source-hash",
+            )
+        ]
+
+    monkeypatch.setattr(cli, "compare_steps_range", fake_compare_steps_range)
+
+    exit_code = main(
+        [
+            "wellness",
+            "compare-steps",
+            "--start",
+            "2026-06-11",
+            "--end",
+            "2026-06-11",
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["persist"] is False

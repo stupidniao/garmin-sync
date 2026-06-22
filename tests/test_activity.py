@@ -108,6 +108,7 @@ def test_sync_activities_dry_run_does_not_download_or_upload(tmp_path) -> None:
     assert results[0].status == "dry_run"
     assert source.downloaded == []
     assert target.uploaded == []
+    assert not (tmp_path / "state.sqlite3").exists()
 
 
 def test_sync_activities_reports_no_source_activity(tmp_path) -> None:

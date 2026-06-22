@@ -46,11 +46,13 @@ def sync_activities_for_date(
     direction: str = CN_TO_GLOBAL,
     dry_run: bool = False,
     force: bool = False,
+    persist: bool = True,
 ) -> list[ActivitySyncResult]:
     """Sync all source activities for one date into the target account."""
 
     validate_activity_direction(direction)
-    store = JsonlStateStore(state_dir, STATE_FILENAME)
+    persist_state = persist and not dry_run
+    store = JsonlStateStore(state_dir, STATE_FILENAME) if persist_state else None
     run_timestamp = utc_timestamp()
     date_str = sync_date.isoformat()
 
@@ -64,7 +66,8 @@ def sync_activities_for_date(
             source_activity_id=None,
             error=f"{type(exc).__name__}: {exc}",
         )
-        _append_activity_record(store, run_timestamp, direction, result)
+        if store is not None:
+            _append_activity_record(store, run_timestamp, direction, result)
         return [result]
 
     target_keys = {
@@ -72,7 +75,7 @@ def sync_activities_for_date(
         for activity in target_activities
         if (key := _activity_dedupe_key(activity)) is not None
     }
-    synced_source_ids = _synced_source_ids(store)
+    synced_source_ids = _synced_source_ids(store) if store is not None else set()
     results: list[ActivitySyncResult] = []
 
     if not source_activities:
@@ -81,7 +84,8 @@ def sync_activities_for_date(
             status="no_source_activity",
             source_activity_id=None,
         )
-        _append_activity_record(store, run_timestamp, direction, result)
+        if store is not None:
+            _append_activity_record(store, run_timestamp, direction, result)
         return [result]
 
     for activity in source_activities:
@@ -95,7 +99,8 @@ def sync_activities_for_date(
             dry_run=dry_run,
             force=force,
         )
-        _append_activity_record(store, run_timestamp, direction, result)
+        if store is not None:
+            _append_activity_record(store, run_timestamp, direction, result)
         if result.status == "synced" and result.source_activity_id is not None:
             synced_source_ids.add(result.source_activity_id)
             key = (result.start_time_local, result.activity_name)

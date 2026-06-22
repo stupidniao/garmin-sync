@@ -130,6 +130,23 @@ def test_compare_steps_range_persists_state_without_raw_payloads(tmp_path) -> No
     assert "payload" not in json.dumps(records)
 
 
+def test_compare_steps_range_dry_run_does_not_persist_state(tmp_path) -> None:
+    source = FakeClient({"2026-06-11": [{"steps": 10}]})
+    target = FakeClient({"2026-06-11": [{"steps": 10}]})
+
+    results = compare_steps_range(
+        source,
+        target,
+        date(2026, 6, 11),
+        date(2026, 6, 11),
+        tmp_path,
+        persist=False,
+    )
+
+    assert results[0].status == "same"
+    assert not (tmp_path / "state.sqlite3").exists()
+
+
 def test_extract_total_steps_from_daily_steps_payload() -> None:
     assert extract_total_steps([{"calendarDate": "2026-06-11", "totalSteps": 10}]) == 10
     assert extract_total_steps([{"calendarDate": "2026-06-11", "totalSteps": None}]) is None
@@ -178,3 +195,20 @@ def test_sync_steps_range_persists_sync_decision(tmp_path) -> None:
     assert records[0]["source_steps"] == 16710
     assert records[0]["target_steps"] is None
     assert records[0]["steps_to_sync"] == 16710
+
+
+def test_sync_steps_range_dry_run_does_not_persist_state(tmp_path) -> None:
+    source = FakeClient({"2026-06-10": [{"totalSteps": 16710}]})
+    target = FakeClient({"2026-06-10": [{"totalSteps": None}]})
+
+    results = sync_steps_range(
+        source,
+        target,
+        date(2026, 6, 10),
+        date(2026, 6, 10),
+        tmp_path,
+        persist=False,
+    )
+
+    assert results[0].status == "sync_unavailable"
+    assert not (tmp_path / "state.sqlite3").exists()

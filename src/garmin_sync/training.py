@@ -115,12 +115,14 @@ def sync_training_schedule_range(
     direction: str = GLOBAL_TO_CN,
     dry_run: bool = False,
     force: bool = False,
+    persist: bool = True,
 ) -> list[TrainingSyncResult]:
     """Sync scheduled workouts from Garmin International to Garmin China."""
 
     validate_direction(direction)
-    state_store = JsonlStateStore(state_dir, STATE_FILENAME)
-    existing_records = state_store.records()
+    persist_state = persist and not dry_run
+    state_store = JsonlStateStore(state_dir, STATE_FILENAME) if persist_state else None
+    existing_records = state_store.records() if state_store is not None else []
     synced_hashes = _synced_hashes(existing_records)
     pending_uploads = _pending_uploaded_workouts(existing_records)
     run_timestamp = utc_timestamp()
@@ -139,7 +141,8 @@ def sync_training_schedule_range(
             source_workout_id=None,
             error=f"{type(exc).__name__}: {exc}",
         )
-        _append_training_record(state_store, run_timestamp, direction, result)
+        if state_store is not None:
+            _append_training_record(state_store, run_timestamp, direction, result)
         return [result]
 
     target_names_by_date = _names_by_date(target_scheduled)
@@ -157,7 +160,8 @@ def sync_training_schedule_range(
             dry_run=dry_run,
             force=force,
         )
-        _append_training_record(state_store, run_timestamp, direction, result)
+        if state_store is not None:
+            _append_training_record(state_store, run_timestamp, direction, result)
         if result.status == "synced" and result.workout_hash is not None:
             synced_hashes.add((result.date, result.workout_hash))
             if result.workout_name:
@@ -176,7 +180,7 @@ def _sync_one_scheduled_workout(
     synced_hashes: set[tuple[str, str]],
     target_names_by_date: dict[str, set[str]],
     pending_uploads: dict[tuple[str, str], int],
-    state_store: JsonlStateStore,
+    state_store: JsonlStateStore | None,
     run_timestamp: str,
     direction: str,
     dry_run: bool,
@@ -275,7 +279,8 @@ def _sync_one_scheduled_workout(
             source_workout_id=scheduled.workout_id,
             target_workout_id=target_workout_id,
         )
-        _append_training_record(state_store, run_timestamp, direction, uploaded_result)
+        if state_store is not None:
+            _append_training_record(state_store, run_timestamp, direction, uploaded_result)
 
     try:
         schedule_result = target_client.schedule_workout(

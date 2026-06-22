@@ -267,6 +267,7 @@ def _run_compare_steps(args: argparse.Namespace) -> int:
         end=end,
         state_dir=config.state_dir,
         direction=direction,
+        persist=not args.dry_run,
     )
 
     report_rows = [asdict(result) for result in results]
@@ -286,7 +287,10 @@ def _run_compare_steps(args: argparse.Namespace) -> int:
         print(f"Wrote JSON report: {args.output}")
 
     _audit_completed(audit, rows=report_rows)
-    print(f"Wrote compare state: {state_path}")
+    if args.dry_run:
+        print(f"Dry run: skipped compare state write: {state_path}")
+    else:
+        print(f"Wrote compare state: {state_path}")
     print(f"Wrote audit log: {audit.path}")
     return 0
 
@@ -315,6 +319,7 @@ def _run_sync_steps(args: argparse.Namespace) -> int:
         end=end,
         state_dir=config.state_dir,
         direction=direction,
+        persist=not args.dry_run,
     )
 
     report_rows = [asdict(result) for result in results]
@@ -335,7 +340,10 @@ def _run_sync_steps(args: argparse.Namespace) -> int:
         print(f"Wrote JSON report: {args.output}")
 
     _audit_completed(audit, rows=report_rows)
-    print(f"Wrote sync state: {state_path}")
+    if args.dry_run:
+        print(f"Dry run: skipped sync state write: {state_path}")
+    else:
+        print(f"Wrote sync state: {state_path}")
     print(f"Wrote audit log: {audit.path}")
     return 0
 
@@ -366,6 +374,7 @@ def _run_sync_schedule(args: argparse.Namespace) -> int:
         direction=direction,
         dry_run=args.dry_run,
         force=args.force,
+        persist=not args.dry_run,
     )
 
     report_rows = [asdict(result) for result in results]
@@ -387,7 +396,10 @@ def _run_sync_schedule(args: argparse.Namespace) -> int:
         print(f"Wrote JSON report: {args.output}")
 
     _audit_completed(audit, rows=report_rows)
-    print(f"Wrote training sync state: {state_path}")
+    if args.dry_run:
+        print(f"Dry run: skipped training sync state write: {state_path}")
+    else:
+        print(f"Wrote training sync state: {state_path}")
     print(f"Wrote audit log: {audit.path}")
     return 0
 
@@ -416,6 +428,7 @@ def _run_sync_today_activity(args: argparse.Namespace) -> int:
         direction=args.direction,
         dry_run=args.dry_run,
         force=args.force,
+        persist=not args.dry_run,
     )
 
     report_rows = [asdict(result) for result in results]
@@ -437,7 +450,10 @@ def _run_sync_today_activity(args: argparse.Namespace) -> int:
         print(f"Wrote JSON report: {args.output}")
 
     _audit_completed(audit, rows=report_rows)
-    print(f"Wrote activity sync state: {state_path}")
+    if args.dry_run:
+        print(f"Dry run: skipped activity sync state write: {state_path}")
+    else:
+        print(f"Wrote activity sync state: {state_path}")
     print(f"Wrote audit log: {audit.path}")
     return 0
 

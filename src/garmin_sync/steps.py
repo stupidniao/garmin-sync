@@ -119,11 +119,13 @@ def compare_steps_range(
     end: date,
     state_dir: Path,
     direction: str = GLOBAL_TO_CN,
+    *,
+    persist: bool = True,
 ) -> list[CompareResult]:
     """Compare steps payloads for each day in an inclusive range."""
 
     validate_direction(direction)
-    store = JsonlStateStore(state_dir)
+    store = JsonlStateStore(state_dir) if persist else None
     run_timestamp = utc_timestamp()
     results: list[CompareResult] = []
 
@@ -133,18 +135,19 @@ def compare_steps_range(
             read_steps(target_client, day),
             day,
         )
-        store.append(
-            CompareStateRecord(
-                run_timestamp=run_timestamp,
-                direction=direction,
-                metric=METRIC_NAME,
-                date=result.date,
-                status=result.status,
-                source_hash=result.source_hash,
-                target_hash=result.target_hash,
-                error=result.error,
+        if store is not None:
+            store.append(
+                CompareStateRecord(
+                    run_timestamp=run_timestamp,
+                    direction=direction,
+                    metric=METRIC_NAME,
+                    date=result.date,
+                    status=result.status,
+                    source_hash=result.source_hash,
+                    target_hash=result.target_hash,
+                    error=result.error,
+                )
             )
-        )
         results.append(result)
 
     return results
@@ -232,11 +235,13 @@ def sync_steps_range(
     end: date,
     state_dir: Path,
     direction: str = GLOBAL_TO_CN,
+    *,
+    persist: bool = True,
 ) -> list[SyncResult]:
     """Evaluate steps sync eligibility for each day in an inclusive range."""
 
     validate_direction(direction)
-    store = JsonlStateStore(state_dir, "steps_sync.jsonl")
+    store = JsonlStateStore(state_dir, "steps_sync.jsonl") if persist else None
     run_timestamp = utc_timestamp()
     results: list[SyncResult] = []
 
@@ -246,19 +251,20 @@ def sync_steps_range(
             read_steps(target_client, day),
             day,
         )
-        store.append(
-            SyncStateRecord(
-                run_timestamp=run_timestamp,
-                direction=direction,
-                metric=METRIC_NAME,
-                date=result.date,
-                status=result.status,
-                source_steps=result.source_steps,
-                target_steps=result.target_steps,
-                steps_to_sync=result.steps_to_sync,
-                error=result.error,
+        if store is not None:
+            store.append(
+                SyncStateRecord(
+                    run_timestamp=run_timestamp,
+                    direction=direction,
+                    metric=METRIC_NAME,
+                    date=result.date,
+                    status=result.status,
+                    source_steps=result.source_steps,
+                    target_steps=result.target_steps,
+                    steps_to_sync=result.steps_to_sync,
+                    error=result.error,
+                )
             )
-        )
         results.append(result)
 
     return results

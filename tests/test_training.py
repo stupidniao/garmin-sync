@@ -148,6 +148,7 @@ def test_sync_training_schedule_dry_run_does_not_write_to_garmin(tmp_path) -> No
     assert results[0].status == "dry_run"
     assert target.uploaded == []
     assert target.scheduled == []
+    assert not (tmp_path / "state.sqlite3").exists()
 
 
 def test_sync_training_schedule_uploads_and_schedules_workout(tmp_path) -> None:
